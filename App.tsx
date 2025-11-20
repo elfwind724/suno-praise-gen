@@ -17,13 +17,15 @@ import {
   Image as ImageIcon,
   Share2,
   Type,
-  Download
+  Download,
+  Settings,
+  KeyRound
 } from 'lucide-react';
 import { analyzeLyrics, generateLyrics, optimizeLyrics, generateSongAssets, generateCoverImage } from './services/geminiService';
 import RadarChartScore from './components/RadarChartScore';
 import SunoTipsPanel from './components/SunoTipsPanel';
 import { EXAMPLE_LYRICS, TAG_CHEAT_SHEET } from './constants';
-import { LyricAnalysis, AppMode, RightPanelTab, SongAssets } from './types';
+import { LyricAnalysis, AppMode, RightPanelTab, SongAssets, AISettings, AIProvider } from './types';
 
 const App: React.FC = () => {
   const [lyrics, setLyrics] = useState<string>("");
@@ -31,6 +33,11 @@ const App: React.FC = () => {
   const [stylePrompts, setStylePrompts] = useState("");
   const [negativePrompts, setNegativePrompts] = useState("Rap, Heavy Metal, Distorted, Screaming, Mumbled");
   
+  // Technical Settings
+  const [weirdness, setWeirdness] = useState<number>(50); // 0-100 scale for UI (mapped to float)
+  const [styleInfluence, setStyleInfluence] = useState<number>(50); // 0-100 scale
+  const [vocalGender, setVocalGender] = useState<'Male'|'Female'|'Both'>('Both');
+
   const [analysis, setAnalysis] = useState<LyricAnalysis | null>(null);
   const [songAssets, setSongAssets] = useState<SongAssets | null>(null);
   
@@ -47,6 +54,14 @@ const App: React.FC = () => {
   const [showExamples, setShowExamples] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [applyingSuggestionIndex, setApplyingSuggestionIndex] = useState<number | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+
+  // API Settings
+  const [aiSettings, setAiSettings] = useState<AISettings>({
+    provider: AIProvider.GEMINI,
+    geminiKey: process.env.API_KEY || "",
+    zhipuKey: ""
+  });
 
   useEffect(() => {
     if (!lyrics) {
@@ -60,19 +75,39 @@ const App: React.FC = () => {
 [Chorus]
 ...`);
     }
+    // Load settings from local storage if needed, or just keep default
+    const storedZhipu = localStorage.getItem('zhipu_key');
+    const storedGemini = localStorage.getItem('gemini_key');
+    const storedProvider = localStorage.getItem('ai_provider');
+    
+    if(storedZhipu || storedGemini || storedProvider) {
+        setAiSettings(prev => ({
+            ...prev,
+            zhipuKey: storedZhipu || prev.zhipuKey,
+            geminiKey: storedGemini || prev.geminiKey,
+            provider: (storedProvider as AIProvider) || prev.provider
+        }));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const saveSettings = () => {
+      localStorage.setItem('zhipu_key', aiSettings.zhipuKey);
+      localStorage.setItem('gemini_key', aiSettings.geminiKey);
+      localStorage.setItem('ai_provider', aiSettings.provider);
+      setShowSettings(false);
+  }
 
   const handleAnalyze = async () => {
     if (!lyrics.trim()) return;
     setIsAnalyzing(true);
     setRightPanelTab(RightPanelTab.ANALYSIS);
     try {
-      const result = await analyzeLyrics(lyrics);
+      const result = await analyzeLyrics(lyrics, aiSettings);
       setAnalysis(result);
       setActiveTab(AppMode.EDITOR); 
     } catch (error) {
-      alert("Analysis failed. Please check your API Key configuration.");
+      alert(`Analysis failed. Please check your ${aiSettings.provider} API configuration.`);
     } finally {
       setIsAnalyzing(false);
     }
@@ -82,18 +117,25 @@ const App: React.FC = () => {
     if (!genPrompt.trim()) return;
     setIsGenerating(true);
     try {
-      const result = await generateLyrics(genPrompt, "Modern Worship");
+      const result = await generateLyrics(genPrompt, "Modern Worship", aiSettings);
       setLyrics(result.lyrics);
       setTitle(result.title);
       setStylePrompts(result.stylePrompts);
       if(result.negativePrompts) setNegativePrompts(result.negativePrompts);
       
+      // Update technical settings if AI suggested them
+      if(result.suggestedSettings) {
+          setWeirdness(result.suggestedSettings.weirdness * 10); // Scale 1-10 to 0-100
+          setStyleInfluence(result.suggestedSettings.styleInfluence * 10);
+          if(result.suggestedSettings.vocalGender) setVocalGender(result.suggestedSettings.vocalGender as any);
+      }
+
       // Auto-analyze generated lyrics
-      const analysisResult = await analyzeLyrics(result.lyrics);
+      const analysisResult = await analyzeLyrics(result.lyrics, aiSettings);
       setAnalysis(analysisResult);
       setRightPanelTab(RightPanelTab.ANALYSIS);
     } catch (error) {
-      alert("Generation failed.");
+      alert("Generation failed. Check API Key.");
     } finally {
       setIsGenerating(false);
     }
@@ -103,9 +145,9 @@ const App: React.FC = () => {
     if(!analysis || !lyrics) return;
     setIsOptimizing(true);
     try {
-        const optimizedLyrics = await optimizeLyrics(lyrics, analysis.suggestions);
+        const optimizedLyrics = await optimizeLyrics(lyrics, analysis.suggestions, aiSettings);
         setLyrics(optimizedLyrics);
-        const newAnalysis = await analyzeLyrics(optimizedLyrics);
+        const newAnalysis = await analyzeLyrics(optimizedLyrics, aiSettings);
         setAnalysis(newAnalysis);
     } catch (error) {
         alert("Optimization failed.");
@@ -118,10 +160,8 @@ const App: React.FC = () => {
       if(!lyrics) return;
       setApplyingSuggestionIndex(index);
       try {
-          const optimizedLyrics = await optimizeLyrics(lyrics, [suggestion]);
+          const optimizedLyrics = await optimizeLyrics(lyrics, [suggestion], aiSettings);
           setLyrics(optimizedLyrics);
-          // Optional: We could re-analyze here, but let's keep it fast for now
-          // Or just clear the specific suggestion from the list locally if we had a mutable copy
       } catch (error) {
           alert("Failed to apply suggestion.");
       } finally {
@@ -133,7 +173,7 @@ const App: React.FC = () => {
       if(!title) return;
       setIsGeneratingAssets(true);
       try {
-          const assets = await generateSongAssets(title, lyrics, stylePrompts);
+          const assets = await generateSongAssets(title, lyrics, stylePrompts, aiSettings);
           setSongAssets(prev => ({ ...prev, ...assets }));
       } catch (error) {
           alert("Failed to generate text assets");
@@ -146,10 +186,10 @@ const App: React.FC = () => {
       if(!lyrics) return;
       setIsGeneratingImage(true);
       try {
-          const base64Img = await generateCoverImage(title || "Worship Song", lyrics);
+          const base64Img = await generateCoverImage(title || "Worship Song", lyrics, aiSettings);
           setSongAssets(prev => ({ ...prev, coverImage: base64Img }));
-      } catch (error) {
-          alert("Failed to generate cover image");
+      } catch (error: any) {
+          alert(error.message || "Failed to generate cover image");
       } finally {
           setIsGeneratingImage(false);
       }
@@ -183,6 +223,87 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans selection:bg-indigo-500/30">
+      
+      {/* Settings Modal */}
+      {showSettings && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+              <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+                  <div className="p-5 border-b border-slate-800 flex justify-between items-center">
+                      <h3 className="font-bold text-white flex items-center gap-2">
+                          <Settings className="w-5 h-5 text-indigo-500"/>
+                          API Configuration
+                      </h3>
+                      <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-white">✕</button>
+                  </div>
+                  <div className="p-6 space-y-6">
+                      
+                      {/* Provider Selection */}
+                      <div className="grid grid-cols-2 gap-3 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                          <button 
+                            onClick={() => setAiSettings(s => ({...s, provider: AIProvider.GEMINI}))}
+                            className={`py-2 px-4 rounded-md text-sm font-bold transition-all ${aiSettings.provider === AIProvider.GEMINI ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}
+                          >
+                              Google Gemini
+                          </button>
+                          <button 
+                            onClick={() => setAiSettings(s => ({...s, provider: AIProvider.ZHIPU}))}
+                            className={`py-2 px-4 rounded-md text-sm font-bold transition-all ${aiSettings.provider === AIProvider.ZHIPU ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}
+                          >
+                              Zhipu GLM-4.6
+                          </button>
+                      </div>
+
+                      <div className="space-y-4">
+                          <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2">
+                                  Google Gemini Key
+                                  {aiSettings.geminiKey && <CheckCircle2 className="w-3 h-3 text-emerald-500"/>}
+                              </label>
+                              <div className="relative">
+                                  <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"/>
+                                  <input 
+                                    type="password"
+                                    value={aiSettings.geminiKey}
+                                    onChange={(e) => setAiSettings(s => ({...s, geminiKey: e.target.value}))}
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-10 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    placeholder="AIzaSy..."
+                                  />
+                              </div>
+                          </div>
+
+                          <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2">
+                                  Zhipu AI Key (GLM-4.6)
+                                  {aiSettings.zhipuKey && <CheckCircle2 className="w-3 h-3 text-emerald-500"/>}
+                              </label>
+                              <div className="relative">
+                                  <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"/>
+                                  <input 
+                                    type="password"
+                                    value={aiSettings.zhipuKey}
+                                    onChange={(e) => setAiSettings(s => ({...s, zhipuKey: e.target.value}))}
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-10 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    placeholder="Enter Zhipu Key..."
+                                  />
+                              </div>
+                              <p className="text-[10px] text-slate-500">
+                                  Required for GLM-4.6 mode. Note: Image generation still uses Gemini.
+                              </p>
+                          </div>
+                      </div>
+                  </div>
+                  <div className="p-4 border-t border-slate-800 bg-slate-950/50 flex justify-end">
+                      <button 
+                        onClick={saveSettings}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded-lg font-bold text-sm transition-colors shadow-lg shadow-indigo-900/20"
+                      >
+                          Save Configuration
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* Header */}
       <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 p-4 sticky top-0 z-30 shadow-sm">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
@@ -192,21 +313,36 @@ const App: React.FC = () => {
             </div>
             <div>
               <h1 className="text-xl font-bold text-white tracking-wide">Suno Praise Gen</h1>
-              <p className="text-xs text-slate-400 font-medium">AI Worship Workshop</p>
+              <div className="flex items-center gap-2">
+                  <p className="text-xs text-slate-400 font-medium">AI Worship Workshop</p>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-indigo-400 font-mono">
+                      {aiSettings.provider === AIProvider.GEMINI ? 'GEMINI 2.5' : 'GLM-4.6'}
+                  </span>
+              </div>
             </div>
           </div>
-          <div className="flex bg-slate-800/50 p-1 rounded-lg border border-slate-700/50">
-             <button 
-              onClick={() => setActiveTab(AppMode.EDITOR)}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === AppMode.EDITOR ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
-            >
-              Lyric Studio
-            </button>
+          <div className="flex items-center gap-3">
+            <div className="flex bg-slate-800/50 p-1 rounded-lg border border-slate-700/50 hidden md:flex">
+                <button 
+                onClick={() => setActiveTab(AppMode.EDITOR)}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === AppMode.EDITOR ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+                >
+                Lyric Studio
+                </button>
+                <button 
+                onClick={() => setActiveTab(AppMode.TIPS)}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === AppMode.TIPS ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+                >
+                Knowledge Base
+                </button>
+            </div>
+            
             <button 
-              onClick={() => setActiveTab(AppMode.TIPS)}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${activeTab === AppMode.TIPS ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}`}
+                onClick={() => setShowSettings(true)}
+                className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-all border border-slate-700/50"
+                title="API Settings"
             >
-              Knowledge Base
+                <Settings className="w-5 h-5"/>
             </button>
           </div>
         </div>
@@ -217,7 +353,7 @@ const App: React.FC = () => {
         
         {activeTab === AppMode.TIPS ? (
             <div className="lg:col-span-12 h-[85vh]">
-                <SunoTipsPanel />
+                <SunoTipsPanel settings={aiSettings} />
             </div>
         ) : (
         <>
@@ -282,14 +418,60 @@ const App: React.FC = () => {
                 </button>
                 
                 {showAdvanced && (
-                    <div className="mt-3 animate-in fade-in slide-in-from-top-2">
-                        <label className="text-xs font-bold text-slate-500 uppercase mb-1.5 block">Exclude Styles (Negative Prompts)</label>
-                         <input 
-                            value={negativePrompts}
-                            onChange={(e) => setNegativePrompts(e.target.value)}
-                            placeholder="e.g. Rap, Metal, Distorted"
-                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-300 text-sm focus:border-indigo-500 outline-none"
-                        />
+                    <div className="mt-4 animate-in fade-in slide-in-from-top-2 space-y-4">
+                         
+                         <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase mb-1.5 block">Exclude Styles (Negative Prompts)</label>
+                            <input 
+                                value={negativePrompts}
+                                onChange={(e) => setNegativePrompts(e.target.value)}
+                                placeholder="e.g. Rap, Metal, Distorted"
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-300 text-sm focus:border-indigo-500 outline-none"
+                            />
+                         </div>
+                         
+                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                             <div>
+                                 <div className="flex justify-between mb-1">
+                                    <label className="text-xs font-bold text-slate-500 uppercase">Vocal Gender</label>
+                                 </div>
+                                 <div className="flex bg-slate-950 rounded-lg border border-slate-700 p-1">
+                                     {['Male', 'Female', 'Both'].map((gender) => (
+                                         <button 
+                                            key={gender}
+                                            onClick={() => setVocalGender(gender as any)}
+                                            className={`flex-1 text-xs py-1.5 rounded ${vocalGender === gender ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                                         >
+                                             {gender}
+                                         </button>
+                                     ))}
+                                 </div>
+                             </div>
+
+                             <div>
+                                 <div className="flex justify-between mb-1">
+                                    <label className="text-xs font-bold text-slate-500 uppercase">Weirdness</label>
+                                    <span className="text-xs font-mono text-indigo-400">{Math.round(weirdness / 10)}</span>
+                                 </div>
+                                 <input 
+                                    type="range" min="10" max="100" step="10"
+                                    value={weirdness} onChange={(e) => setWeirdness(Number(e.target.value))}
+                                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                                 />
+                             </div>
+
+                             <div>
+                                 <div className="flex justify-between mb-1">
+                                    <label className="text-xs font-bold text-slate-500 uppercase">Style Influence</label>
+                                    <span className="text-xs font-mono text-indigo-400">{Math.round(styleInfluence / 10)}</span>
+                                 </div>
+                                 <input 
+                                    type="range" min="10" max="100" step="10"
+                                    value={styleInfluence} onChange={(e) => setStyleInfluence(Number(e.target.value))}
+                                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                                 />
+                             </div>
+                         </div>
                     </div>
                 )}
             </div>
@@ -581,6 +763,9 @@ const App: React.FC = () => {
                                 <div className="text-center p-6">
                                     <ImageIcon className="w-12 h-12 text-slate-700 mx-auto mb-2"/>
                                     <p className="text-xs text-slate-500">Generate AI cover art based on your lyrics</p>
+                                    {aiSettings.provider === AIProvider.ZHIPU && !aiSettings.geminiKey && (
+                                        <p className="text-[10px] text-rose-400 mt-2">Gemini Key required for Images</p>
+                                    )}
                                 </div>
                             )}
                         </div>

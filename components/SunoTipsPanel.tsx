@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { searchSunoTips } from '../services/geminiService';
 import { Search, Loader2, BookOpen } from 'lucide-react';
-import ReactMarkdown from 'react-markdown'; // You'd typically install this, but we'll just render text for simplicity in this prompt constraint
-// Note: In a real app, add 'react-markdown' to package.json
+import { AISettings } from '../types';
 
-const SunoTipsPanel: React.FC = () => {
+interface Props {
+  settings: AISettings;
+}
+
+const SunoTipsPanel: React.FC<Props> = ({ settings }) => {
   const [query, setQuery] = useState('');
   const [result, setResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -13,7 +16,7 @@ const SunoTipsPanel: React.FC = () => {
     if (!query.trim()) return;
     setLoading(true);
     try {
-      const text = await searchSunoTips(query);
+      const text = await searchSunoTips(query, settings);
       setResult(text);
     } catch (e) {
       setResult("Failed to retrieve tips.");

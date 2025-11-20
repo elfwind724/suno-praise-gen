@@ -34,6 +34,11 @@ export interface GeneratedSong {
   stylePrompts: string; // e.g. "Cinematic, Orchestral, Male Vocals"
   negativePrompts: string; // e.g. "Rap, Heavy Metal, Distorted"
   lyrics: string;
+  suggestedSettings?: {
+    weirdness: number;
+    styleInfluence: number;
+    vocalGender: 'Male' | 'Female';
+  };
 }
 
 export interface SongAssets {
@@ -50,4 +55,15 @@ export enum AppMode {
 export enum RightPanelTab {
   ANALYSIS = 'ANALYSIS',
   RELEASE_KIT = 'RELEASE_KIT',
+}
+
+export enum AIProvider {
+  GEMINI = 'GEMINI',
+  ZHIPU = 'ZHIPU'
+}
+
+export interface AISettings {
+  provider: AIProvider;
+  geminiKey: string;
+  zhipuKey: string;
 }
